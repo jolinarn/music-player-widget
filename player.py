@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import sys
 import os
 
@@ -84,6 +85,12 @@ class MediaBridge(QObject):
         # the wrong track's art.
         self._last_seen_title = None
         self._last_confirmed_video_id = None
+        # mpris:length is unstable for some content (e.g. YouTube Music radio
+        # streams with no per-track URL just keep growing it like a live
+        # stream's elapsed duration), not just right after a track change.
+        # Only trust a length once it's been reported twice in a row.
+        self._pending_length = None
+        self._stable_length = 0
 
     @pyqtSlot(result=str)
     def get_metadata(self):
@@ -125,8 +132,19 @@ class MediaBridge(QObject):
             title_just_changed = title != self._last_seen_title
             self._last_seen_title = title
             if title_just_changed:
-                length = 0
                 position = 0
+                self._pending_length = None
+                self._stable_length = 0
+
+            # Only trust a length reading once it repeats on the very next
+            # poll -- filters out both the one-poll transition lag above and
+            # ongoing per-poll drift (growing/live-style content), which
+            # would otherwise make the progress bar jump or show a wrong total.
+            if length == self._pending_length:
+                self._stable_length = length
+            else:
+                self._pending_length = length
+            length = self._stable_length
 
             # Fall back to YouTube's predictable thumbnail URL when the track's page URL still has a video id.
             if not art_url:
