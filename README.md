@@ -93,7 +93,7 @@ At the top of `player.py`:
 | `PLAYERS` | `plasma-browser-integration,brave` | MPRIS players to follow, in priority order |
 | `WAYLAND_START_POS` | `(40, 40)` | Where the widget appears on Wayland |
 
-Background color and position lock are in the widget's **⋮** menu.
+Background color and position lock are in the widget's **⋮** menu. The widget remembers where you dragged it (`~/.config/music-player-widget/position.json`).
 
 ## Troubleshooting
 
