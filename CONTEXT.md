@@ -66,6 +66,14 @@ playback and `pactl` (PipeWire) for real volume/mute control.
      Instead the window stays put while a click-through full-screen `DragOutline` shows where
      it will land, and `drag_end` moves it once. X11 still drags live via `dx/dy`.
 
+10. **`qwebchannel.js` is injected from Python, not `<script src="qrc:///...">`.** Newer
+    QtWebEngine (6.14) blocks a `file://` page from loading `qrc:` scripts, so `QWebChannel`
+    was undefined and the widget sat on "Nothing Playing" forever with no Python error.
+    `main()` reads `:/qtwebchannel/qwebchannel.js` and inserts it as a `QWebEngineScript`.
+
+11. **Album art from plasma-browser-integration is a `file:///tmp/...` path** the page can't
+    load. `MediaBridge._inline_local_art` converts it to a `data:` URI (cached per path).
+
 ## Current features
 
 - Play/pause/next/prev, seek-on-click progress bar (client-side interpolated for smoothness

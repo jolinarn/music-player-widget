@@ -15,12 +15,14 @@ os.environ.setdefault(
 
 import re
 import subprocess
+import base64
 import json
-from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt
+import traceback
+from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEngineScript
 from PyQt6.QtWebChannel import QWebChannel
 
 import wayland
@@ -169,6 +171,23 @@ class MediaBridge(QObject):
         # Only trust a length once it's been reported twice in a row.
         self._pending_length = None
         self._stable_length = 0
+        self._art_cache_key = None
+        self._art_cache_value = ""
+
+    def _inline_local_art(self, file_url):
+        if file_url == self._art_cache_key:
+            return self._art_cache_value
+        value = ""
+        try:
+            path = QUrl(file_url).toLocalFile()
+            with open(path, "rb") as f:
+                data = f.read()
+            mime = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
+            value = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+        except OSError:
+            pass
+        self._art_cache_key, self._art_cache_value = file_url, value
+        return value
 
     @pyqtSlot(result=str)
     def get_metadata(self):
@@ -240,16 +259,22 @@ class MediaBridge(QObject):
                     art_url = f"https://i.ytimg.com/vi/{candidate_id}/hqdefault.jpg"
                     self._last_confirmed_video_id = candidate_id
 
+            # plasma-browser-integration hands out art as a local /tmp file,
+            # which the page can't load -- inline it as a data: URI instead
+            # (cached, so the file is only read when the art changes).
+            if art_url.startswith("file://"):
+                art_url = self._inline_local_art(art_url)
+
             volume = _get_brave_volume()
             muted = _get_brave_muted()
 
             try:
-                shuffle = subprocess.check_output(["playerctl", "-p", PLAYERS, "shuffle"], text=True).strip()
+                shuffle = subprocess.check_output(["playerctl", "-p", PLAYERS, "shuffle"], text=True, stderr=subprocess.DEVNULL).strip()
             except Exception:
                 shuffle = "Off"
 
             try:
-                loop = subprocess.check_output(["playerctl", "-p", PLAYERS, "loop"], text=True).strip()
+                loop = subprocess.check_output(["playerctl", "-p", PLAYERS, "loop"], text=True, stderr=subprocess.DEVNULL).strip()
             except Exception:
                 loop = "None"
 
@@ -266,6 +291,7 @@ class MediaBridge(QObject):
                 "loop": loop
             })
         except Exception:
+            traceback.print_exc()
             return json.dumps({
                 "title": "Nothing Playing",
                 "artist": "Brave",
@@ -312,7 +338,7 @@ class MediaBridge(QObject):
     @pyqtSlot()
     def toggle_shuffle(self):
         try:
-            current = subprocess.check_output(["playerctl", "-p", PLAYERS, "shuffle"], text=True).strip()
+            current = subprocess.check_output(["playerctl", "-p", PLAYERS, "shuffle"], text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:
             current = "Off"
         subprocess.run(["playerctl", "-p", PLAYERS, "shuffle", "Off" if current == "On" else "On"])
@@ -320,7 +346,7 @@ class MediaBridge(QObject):
     @pyqtSlot()
     def toggle_repeat(self):
         try:
-            current = subprocess.check_output(["playerctl", "-p", PLAYERS, "loop"], text=True).strip()
+            current = subprocess.check_output(["playerctl", "-p", PLAYERS, "loop"], text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:
             current = "None"
         order = ["None", "Track", "Playlist"]
@@ -347,6 +373,19 @@ def main():
     channel.registerObject('bridge', bridge)
     channel.registerObject('windowBridge', window_bridge)
     web.page().setWebChannel(channel)
+
+    # Newer QtWebEngine refuses <script src="qrc:///..."> from a file:// page,
+    # leaving QWebChannel undefined and the widget stuck on "Nothing Playing".
+    # Inject Qt's bundled qwebchannel.js straight into the page instead.
+    js_file = QFile(":/qtwebchannel/qwebchannel.js")
+    if js_file.open(QIODevice.OpenModeFlag.ReadOnly):
+        script = QWebEngineScript()
+        script.setName("qwebchannel")
+        script.setSourceCode(bytes(js_file.readAll()).decode("utf-8"))
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        web.page().scripts().insert(script)
+        js_file.close()
 
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.html")
     web.load(QUrl.fromLocalFile(html_path))

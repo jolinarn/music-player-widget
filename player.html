@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cyberpunk Music Player</title>
 
-  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 
   <style>
     body {
@@ -78,7 +77,7 @@
     .play-icon-small {
       width: 16px;
       height: 16px;
-      background-color: #ff2a5f;
+      background-color: #ff2a8a;
       border-radius: 50%;
       display: flex;
       align-items: center;
@@ -164,7 +163,7 @@
     .menu-reset {
       background: none;
       border: none;
-      color: #ff2a5f;
+      color: #ff2a8a;
       font-size: 12px;
       font-family: inherit;
       cursor: pointer;
@@ -191,11 +190,11 @@
       height: 84px;
       border-radius: 10px;
       background: rgba(22, 27, 34, 0.8);
-      border: 1px solid rgba(255, 42, 95, 0.3);
+      border: 1px solid rgba(255, 42, 138, 0.3);
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #ff2a5f;
+      color: #ff2a8a;
       font-size: 10px;
       flex-shrink: 0;
       position: relative;
@@ -251,7 +250,7 @@
 
     .bar {
       width: 2px;
-      background-color: #ff2a5f;
+      background-color: #ff2a8a;
       border-radius: 1px;
       transition: height 0.15s ease;
     }
@@ -275,7 +274,7 @@
     .progress-fill {
       width: 0%;
       height: 100%;
-      background-color: #ff2a5f;
+      background-color: #ff2a8a;
       border-radius: 3.5px;
       position: relative;
       pointer-events: none;
@@ -288,9 +287,9 @@
       top: -2px;
       width: 10px;
       height: 10px;
-      background-color: #ff2a5f;
+      background-color: #ff2a8a;
       border-radius: 50%;
-      box-shadow: 0 0 6px #ff2a5f;
+      box-shadow: 0 0 6px #ff2a8a;
     }
 
     .time-labels {
@@ -346,7 +345,7 @@
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background-color: #ff2a5f;
+      background-color: #ff2a8a;
       color: #ffffff;
       font-size: 7px;
       font-weight: 700;
@@ -368,14 +367,14 @@
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      border: 1.5px solid #ff2a5f;
-      box-shadow: 0 0 8px rgba(255, 42, 95, 0.25);
+      border: 1.5px solid #ff2a8a;
+      box-shadow: 0 0 8px rgba(255, 42, 138, 0.25);
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #ff2a5f;
+      color: #ff2a8a;
       cursor: pointer;
-      background: rgba(255, 42, 95, 0.05);
+      background: rgba(255, 42, 138, 0.05);
     }
 
     .volume-container {
@@ -493,7 +492,7 @@
         <svg class="icon nav-btn" id="prevBtn" width="20" height="20" viewBox="0 0 24 24"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
 
         <div class="play-btn-large" id="playBtn">
-          <svg class="icon" id="playIcon" width="20" height="20" viewBox="0 0 24 24" stroke-width="1.2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+          <svg class="icon" id="playIcon" width="20" height="20" viewBox="0 0 24 24" stroke-width="1.2"><polygon points="7 3 21 12 7 21 7 3"></polygon></svg>
         </div>
 
         <svg class="icon nav-btn" id="nextBtn" width="20" height="20" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
@@ -514,7 +513,7 @@
   </div>
 
   <script>
-    const PLAY_PATH = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+    const PLAY_PATH = '<polygon points="7 3 21 12 7 21 7 3"></polygon>';
     const PAUSE_PATH = '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>';
     const VOLUME_WAVES_D = "M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07";
     const VOLUME_MUTED_D = "M23 9l-6 6M17 9l6 6";
