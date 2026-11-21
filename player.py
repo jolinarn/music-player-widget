@@ -83,6 +83,43 @@ class DragOutline(QWidget):
         p.drawPath(path)
 
 
+POSITION_FILE = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "music-player-widget", "position.json",
+)
+
+
+def _load_position(kind):
+    """Saved [x, y] for "wayland" (layer-shell margins) or "x11" (window pos)."""
+    try:
+        with open(POSITION_FILE) as f:
+            pos = json.load(f).get(kind)
+        if isinstance(pos, list) and len(pos) == 2 and all(isinstance(v, int) for v in pos):
+            return pos
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def _save_position(kind, pos):
+    try:
+        with open(POSITION_FILE) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[kind] = [int(pos[0]), int(pos[1])]
+    try:
+        os.makedirs(os.path.dirname(POSITION_FILE), exist_ok=True)
+        tmp = POSITION_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, POSITION_FILE)
+    except OSError:
+        pass
+
+
 class WindowBridge(QObject):
     # QWebEngineView's rendered content is backed by Chromium's own render
     # surface, which captures raw mouse events before they reach the outer
@@ -117,11 +154,16 @@ class WindowBridge(QObject):
 
     @pyqtSlot()
     def drag_end(self):
+        if self.wayland_pos is None:
+            # X11 moved live during the drag; just remember where it ended.
+            _save_position("x11", [self.window.x(), self.window.y()])
+            return
         if self.outline is not None:
             self.outline.hide()
         if self._target is not None and self._target != self.wayland_pos:
             self.wayland_pos = self._target
             wayland.set_position(self.window, *self._target)
+            _save_position("wayland", self._target)
         self._target = None
 
 
@@ -516,8 +558,15 @@ def main():
         # OpenGL one, which drops any layer-shell setup done before -- so let
         # that happen first, then configure the window that will actually show.
         app.processEvents()
-        if wayland.setup_layer_shell(web, *WAYLAND_START_POS):
-            window_bridge.wayland_pos = list(WAYLAND_START_POS)
+        start = _load_position("wayland") or list(WAYLAND_START_POS)
+        # Keep it on screen if the saved spot came from a bigger monitor.
+        screen = web.screen().geometry()
+        start = [
+            max(0, min(start[0], screen.width() - web.width())),
+            max(0, min(start[1], screen.height() - web.height())),
+        ]
+        if wayland.setup_layer_shell(web, *start):
+            window_bridge.wayland_pos = start
             outline = DragOutline()
             # without it, Wayland drags still work, just with no preview
             if outline.setup_ok:
@@ -525,6 +574,10 @@ def main():
         else:
             print("layer-shell-qt unavailable, widget position is up to the compositor",
                   file=sys.stderr)
+    else:
+        saved = _load_position("x11")
+        if saved:
+            web.move(*saved)
 
     web.show()
 
