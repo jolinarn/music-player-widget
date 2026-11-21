@@ -39,7 +39,8 @@ playback and `pactl` (PipeWire) for real volume/mute control.
 
 5. **`QWebEngineView` doesn't reliably deliver raw mouse events to Python widget overrides.**
    Window dragging is implemented in JS (tracks `mousemove` on `.player-border`) calling
-   `windowBridge.move_by(dx, dy)`, not via Qt's `mousePressEvent`/`mouseMoveEvent`.
+   `windowBridge.drag(dx, dy, grabDx, grabDy)`, not via Qt's `mousePressEvent`/`mouseMoveEvent`.
+
 
 6. **CSS `[hidden]` is beaten by any author `display` rule** of equal/higher specificity. The
    menu popover's `display: flex` had to be scoped to `.menu-popover:not([hidden])` — otherwise
@@ -54,6 +55,16 @@ playback and `pactl` (PipeWire) for real volume/mute control.
 8. **Volume-drag is throttled** (max one `pactl` call per 80ms during a drag, final precise
    value sent on mouseup) — unthrottled `mousemove`-triggered subprocess spawns were backing up
    the main thread enough to delay metadata polling and make cover art appear stuck.
+
+9. **Wayland** (`wayland.py`): `move()` and `WindowStaysOnBottomHint` are ignored there, so the
+   widget becomes a layer-shell surface on the *bottom* layer, anchored top-left and positioned
+   by margins (starts at `WAYLAND_START_POS`). Two traps:
+   - Loading the page makes QtWebEngine swap the native window for an OpenGL one, dropping any
+     layer-shell setup done earlier -- so setup runs *after* `web.load()` + `processEvents()`.
+   - The app can't know its window position, and moving the window mid-drag shifts the
+     window-local pointer coords under it, so live dragging overshoots (badly on fast drags).
+     Instead the window stays put while a click-through full-screen `DragOutline` shows where
+     it will land, and `drag_end` moves it once. X11 still drags live via `dx/dy`.
 
 ## Current features
 

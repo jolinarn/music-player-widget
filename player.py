@@ -17,13 +17,65 @@ import re
 import subprocess
 import json
 from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebChannel import QWebChannel
 
+import wayland
+
 
 PLAYERS = "plasma-browser-integration,brave"
+WAYLAND_START_POS = (40, 40)  # no window manager placement on Wayland, so pick a spot
+
+
+# matches --card-clip in player.html
+CARD_PATH = [(20, 0), (262, 0), ("q", 280, 0, 280, 18), (280, 300), (260, 320),
+             (18, 320), ("q", 0, 320, 0, 302), (0, 20)]
+OUTLINE_COLOR = QColor(0, 240, 255, 200)
+
+
+class DragOutline(QWidget):
+    # Wayland-only stand-in for live dragging: a click-through, full-screen
+    # overlay that draws the card's outline where it will land. The real
+    # window stays put until the drag ends (see WindowBridge).
+    def __init__(self):
+        super().__init__()
+        self._pos = None
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setup_ok = wayland.setup_fill_overlay(self)
+
+    def show_at(self, x, y):
+        self._pos = (x, y)
+        if not self.isVisible():
+            self.show()
+        self.update()
+
+    def paintEvent(self, _):
+        if self._pos is None:
+            return
+        path = QPainterPath()
+        x0, y0 = self._pos
+        path.moveTo(x0 + CARD_PATH[0][0], y0 + CARD_PATH[0][1])
+        for pt in CARD_PATH[1:]:
+            if pt[0] == "q":
+                path.quadTo(x0 + pt[1], y0 + pt[2], x0 + pt[3], y0 + pt[4])
+            else:
+                path.lineTo(x0 + pt[0], y0 + pt[1])
+        path.closeSubpath()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillPath(path, QColor(0, 240, 255, 20))
+        pen = QPen(OUTLINE_COLOR, 2, Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.drawPath(path)
 
 
 class WindowBridge(QObject):
@@ -33,13 +85,39 @@ class WindowBridge(QObject):
     # can't be implemented at the Python widget level. Instead, JS in the page
     # (which reliably gets every mouse event) tracks the drag and calls this
     # bridge to move the actual OS window.
+    #
+    # On Wayland the app can't know where its window is (screen coords are
+    # really window-local), and moving the window mid-drag shifts those coords
+    # under the pointer, so live moves overshoot. Instead the window stays put,
+    # an outline follows the pointer drift from the grab point, and the window
+    # jumps there on release.
     def __init__(self, window):
         super().__init__()
         self.window = window
+        self.wayland_pos = None  # [x, y] layer-shell margins, None on X11
+        self.outline = None
+        self._target = None
 
-    @pyqtSlot(int, int)
-    def move_by(self, dx, dy):
-        self.window.move(self.window.x() + dx, self.window.y() + dy)
+    @pyqtSlot(int, int, int, int)
+    def drag(self, dx, dy, grab_dx, grab_dy):
+        if self.wayland_pos is None:
+            self.window.move(self.window.x() + dx, self.window.y() + dy)
+            return
+        screen = self.window.screen().geometry()
+        x = max(0, min(self.wayland_pos[0] + grab_dx, screen.width() - self.window.width()))
+        y = max(0, min(self.wayland_pos[1] + grab_dy, screen.height() - self.window.height()))
+        self._target = [x, y]
+        if self.outline is not None:
+            self.outline.show_at(x, y)
+
+    @pyqtSlot()
+    def drag_end(self):
+        if self.outline is not None:
+            self.outline.hide()
+        if self._target is not None and self._target != self.wayland_pos:
+            self.wayland_pos = self._target
+            wayland.set_position(self.window, *self._target)
+        self._target = None
 
 
 def _find_brave_sink_input():
@@ -261,6 +339,8 @@ def main():
     # Album art URLs from playerctl are remote; QWebEngine blocks file:// pages from fetching remote content by default.
     web.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
+    web.resize(280, 320)
+
     channel = QWebChannel()
     bridge = MediaBridge()
     window_bridge = WindowBridge(web)
@@ -271,7 +351,21 @@ def main():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "player.html")
     web.load(QUrl.fromLocalFile(html_path))
 
-    web.resize(280, 320)
+    if wayland.is_wayland():
+        # Loading the page makes QtWebEngine swap the native window for an
+        # OpenGL one, which drops any layer-shell setup done before -- so let
+        # that happen first, then configure the window that will actually show.
+        app.processEvents()
+        if wayland.setup_layer_shell(web, *WAYLAND_START_POS):
+            window_bridge.wayland_pos = list(WAYLAND_START_POS)
+            outline = DragOutline()
+            # without it, Wayland drags still work, just with no preview
+            if outline.setup_ok:
+                window_bridge.outline = outline
+        else:
+            print("layer-shell-qt unavailable, widget position is up to the compositor",
+                  file=sys.stderr)
+
     web.show()
 
     sys.exit(app.exec())
