@@ -16,6 +16,7 @@ os.environ.setdefault(
 import re
 import subprocess
 import base64
+import fcntl
 import json
 import traceback
 from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice
@@ -354,7 +355,23 @@ class MediaBridge(QObject):
         subprocess.run(["playerctl", "-p", PLAYERS, "loop", next_state])
 
 
+def _acquire_single_instance_lock():
+    # A second launch (menu clicked twice, restart without killing the old
+    # one) would stack an identical widget exactly on top of the first --
+    # dragging then looks like the widget "copied itself". Hold an flock for
+    # the process lifetime; if it's taken, another instance is running.
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    lock_file = open(os.path.join(runtime_dir, "music-player-widget.lock"), "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("music-player-widget is already running", file=sys.stderr)
+        sys.exit(0)
+    return lock_file
+
+
 def main():
+    _instance_lock = _acquire_single_instance_lock()  # noqa: F841 -- keep fd open
     app = QApplication(sys.argv)
     web = QWebEngineView()
 
