@@ -16,10 +16,12 @@ os.environ.setdefault(
 import re
 import subprocess
 import base64
+import time
 import fcntl
 import json
 import traceback
-from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice
+from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice, QTimer
+from PyQt6.QtNetwork import QLocalSocket
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -156,6 +158,71 @@ def _get_brave_muted():
     return bool(stream.get("mute", False)) if stream else False
 
 
+YTM_SOCKET_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}",
+    "music-player-widget.sock",
+)
+# How long a state report from the browser extension stays trustworthy.
+# The extension reports twice a second; if it goes quiet (tab closed,
+# extension off) fall back to MPRIS.
+YTM_STATE_MAX_AGE = 2.0
+YTM_TO_MPRIS_LOOP = {"NONE": "None", "ONE": "Track", "ALL": "Playlist"}
+
+
+class YtmLink(QObject):
+    """Client for native/host.py, which Brave runs for the YouTube Music
+    extension (extension/). Gives YouTube Music's own per-track time and its
+    real shuffle/repeat state, which MPRIS can't (see CONTEXT.md #12)."""
+
+    def __init__(self):
+        super().__init__()
+        self.state = None
+        self.state_at = 0.0
+        self._buf = b""
+        self._sock = QLocalSocket(self)
+        self._sock.readyRead.connect(self._on_ready_read)
+        self._sock.disconnected.connect(self._on_disconnected)
+        self._retry = QTimer(self)
+        self._retry.setInterval(2000)
+        self._retry.timeout.connect(self._ensure_connected)
+        self._retry.start()
+        self._ensure_connected()
+
+    def _ensure_connected(self):
+        if self._sock.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+            self._sock.connectToServer(YTM_SOCKET_PATH)
+
+    def _on_disconnected(self):
+        # Host gone (Brave closed): drop any half-read line and the last
+        # snapshot so the widget falls back to MPRIS immediately.
+        self._buf = b""
+        self.state = None
+
+    def _on_ready_read(self):
+        self._buf += bytes(self._sock.readAll())
+        while b"\n" in self._buf:
+            line, self._buf = self._buf.split(b"\n", 1)
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("op") == "state":
+                self.state = msg
+                self.state_at = time.monotonic()
+
+    def live_state(self):
+        if self.state is None or time.monotonic() - self.state_at > YTM_STATE_MAX_AGE:
+            return None
+        return self.state
+
+    def send(self, msg):
+        if self._sock.state() != QLocalSocket.LocalSocketState.ConnectedState:
+            return False
+        self._sock.write((json.dumps(msg) + "\n").encode("utf-8"))
+        self._sock.flush()
+        return True
+
+
 class MediaBridge(QObject):
     def __init__(self):
         super().__init__()
@@ -173,6 +240,7 @@ class MediaBridge(QObject):
         self._pending_length = None
         self._stable_length = 0
         self._art_cache_key = None
+        self.ytm = YtmLink()
         self._art_cache_value = ""
 
     def _inline_local_art(self, file_url):
@@ -206,9 +274,17 @@ class MediaBridge(QObject):
                 "{{title}}", "{{artist}}", "{{mpris:artUrl}}", "{{xesam:url}}",
                 "{{mpris:length}}", "{{position}}", "{{status}}",
             ])
-            raw = subprocess.check_output(
-                ["playerctl", "-p", PLAYERS, "metadata", "--format", fmt], text=True
-            ).strip()
+            try:
+                raw = subprocess.check_output(
+                    ["playerctl", "-p", PLAYERS, "metadata", "--format", fmt],
+                    text=True, stderr=subprocess.DEVNULL, timeout=2,
+                ).strip()
+            except (subprocess.SubprocessError, OSError):
+                # No MPRIS player (or it hung). Not fatal if the extension
+                # is live -- its snapshot is applied below.
+                if not self.ytm.live_state():
+                    raise
+                raw = ""
             parts = (raw.split(sep) + [""] * 7)[:7]
             title, artist, art_url, track_url, length_us, position_us, status = parts
 
@@ -279,7 +355,29 @@ class MediaBridge(QObject):
             except Exception:
                 loop = "None"
 
+            # Prefer YouTube Music's own view when the extension is live:
+            # MPRIS position/length keep counting across tracks (one
+            # continuous stream), and MPRIS has no real shuffle/repeat.
+            ytm = self.ytm.live_state()
+            if ytm and ytm.get("length"):
+                length = float(ytm["length"])
+                position = float(ytm.get("position") or 0)
+                if ytm.get("playing"):
+                    position += time.monotonic() - self.ytm.state_at
+                position = min(position, length)
+                status = "Playing" if ytm.get("playing") else "Paused"
+                if ytm.get("title"):
+                    title = ytm["title"]
+            if ytm and ytm.get("art"):
+                # Straight from YT Music's player bar, so it changes exactly
+                # with the track (MPRIS art lags or sticks; CONTEXT.md #3).
+                art_url = ytm["art"]
+            if ytm:
+                shuffle = "On" if ytm.get("shuffle") else "Off"
+                loop = YTM_TO_MPRIS_LOOP.get(ytm.get("repeat"), "None")
+
             return json.dumps({
+                "bridge": ytm is not None,
                 "title": title if title else "Nothing Playing",
                 "artist": artist if artist else "Brave",
                 "art_url": art_url,
@@ -320,6 +418,8 @@ class MediaBridge(QObject):
 
     @pyqtSlot(float)
     def set_position(self, seconds):
+        if self.ytm.live_state() and self.ytm.send({"op": "seek", "position": seconds}):
+            return
         subprocess.run(["playerctl", "-p", PLAYERS, "position", str(seconds)])
 
     @pyqtSlot(float)
@@ -338,6 +438,8 @@ class MediaBridge(QObject):
 
     @pyqtSlot()
     def toggle_shuffle(self):
+        if self.ytm.live_state() and self.ytm.send({"op": "toggleShuffle"}):
+            return
         try:
             current = subprocess.check_output(["playerctl", "-p", PLAYERS, "shuffle"], text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:
@@ -346,6 +448,8 @@ class MediaBridge(QObject):
 
     @pyqtSlot()
     def toggle_repeat(self):
+        if self.ytm.live_state() and self.ytm.send({"op": "cycleRepeat"}):
+            return
         try:
             current = subprocess.check_output(["playerctl", "-p", PLAYERS, "loop"], text=True, stderr=subprocess.DEVNULL).strip()
         except Exception:

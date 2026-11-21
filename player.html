@@ -531,6 +531,7 @@
     let isPlaying = false;
     let lastTitle = null;
     let shuffleActive = false;
+    let bridgeLive = false;
 
     // The last known position/timestamp pair from a real poll, used to
     // interpolate the progress bar smoothly between polls (each poll takes
@@ -618,9 +619,14 @@
           const playIcon = document.getElementById('playIcon');
           playIcon.innerHTML = isPlaying ? PAUSE_PATH : PLAY_PATH;
 
-          // Repeat state is reliably reported by playerctl; shuffle is not
-          // (this MPRIS source doesn't expose a Shuffle property at all), so
-          // shuffle's lit state is driven locally by the click handler instead.
+          // With the browser extension connected (info.bridge), shuffle and
+          // repeat are YouTube Music's real state. Without it MPRIS has no
+          // Shuffle at all, so shuffle's lit state stays local to the click.
+          bridgeLive = !!info.bridge;
+          if (bridgeLive) {
+            shuffleActive = info.shuffle === 'On';
+            document.getElementById('shuffleBtn').classList.toggle('active', shuffleActive);
+          }
           document.getElementById('repeatBtn').classList.toggle('active', !!info.loop && info.loop !== 'None');
           document.getElementById('repeatBadge').classList.toggle('show', info.loop === 'Track');
         });
@@ -633,8 +639,10 @@
     document.getElementById('prevBtn').onclick = (e) => { e.stopPropagation(); bridge && bridge.prev_track(); };
     document.getElementById('shuffleBtn').onclick = (e) => {
       e.stopPropagation();
-      shuffleActive = !shuffleActive;
-      document.getElementById('shuffleBtn').classList.toggle('active', shuffleActive);
+      if (!bridgeLive) {
+        shuffleActive = !shuffleActive;
+        document.getElementById('shuffleBtn').classList.toggle('active', shuffleActive);
+      }
       bridge && bridge.toggle_shuffle();
     };
     document.querySelector('.repeat-wrap').onclick = (e) => { e.stopPropagation(); bridge && bridge.toggle_repeat(); };

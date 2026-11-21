@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Music Player Widget Bridge",
+  "description": "Lets the music-player-widget desktop widget read and control YouTube Music's shuffle, repeat and track time.",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs6AdDlzAdMN1s7e/5ehgzALLTP1klntk6lJB0j84IRHIzxEXEcBci736uvOeG/34bifDqQKKYwW9PqwbmBHHaEl6S+FryYAJxHDpc2wUEc9srpvj1YzMVsTsXKe6FqwPbRWsgiBswSRJQtRxip1/sptWAU413TuWPj+JvyhbF8y6SPck1n1eDuBiW+Gr70b8fIQI6tBNPi0gdogvqjGcZYdyzXvrulmtpJXz3xiu+WJCZhs+ST/5mM1uVIax8Ph4XPJl+pkSuXb3ydVTF6M03EYiGV+ewcGx7dxRZ18wtIVFePy152l2eJI+1o3KCuh88yvShSfz+TbIeIjTWVrUywIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "host_permissions": ["https://music.youtube.com/*"],
+  "background": { "service_worker": "sw.js" },
+  "content_scripts": [{
+    "matches": ["https://music.youtube.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}

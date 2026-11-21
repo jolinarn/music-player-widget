@@ -74,6 +74,34 @@ playback and `pactl` (PipeWire) for real volume/mute control.
 11. **Album art from plasma-browser-integration is a `file:///tmp/...` path** the page can't
     load. `MediaBridge._inline_local_art` converts it to a `data:` URI (cached per path).
 
+12. **YouTube Music plays the queue as ONE continuous media stream.** `<video>.currentTime`
+    and MPRIS position/length keep counting across tracks (live trace 2026-11-20: position
+    516s -> 611s across three ~3-min tracks, length 533 -> 641). MPRIS also has no Shuffle and
+    its LoopStatus only toggles `<video>.loop`. So per-track time, real shuffle/repeat and
+    reliable art come from the **browser extension bridge** (below). Without it the widget
+    falls back to MPRIS and the progress bar is wrong for YT Music.
+
+## YouTube Music bridge (extension/ + native/)
+
+```
+content.js (music.youtube.com) -> sw.js (MV3) -> native/host.py (Brave spawns it, stdio)
+  -> $XDG_RUNTIME_DIR/music-player-widget.sock -> player.py YtmLink (QLocalSocket)
+```
+
+- `content.js` reads the player-bar progress slider (per-track, whole seconds) and smooths it
+  with the `<video>` clock via an offset re-anchored on track change/seek; reads/clicks the
+  real shuffle/repeat buttons; art = first loaded player-bar `<img>`, upscaled to 544px.
+  `navigator.mediaSession` artwork is NOT visible from the isolated world (tried).
+- Seek = `video.currentTime - trackPos + target` (the continuous timeline again).
+- `host.py` serves the socket (host lives as long as Brave; widget can restart). Logs to
+  `~/.local/state/music-player-widget/host.log`.
+- Extension ID is pinned by `key` in manifest.json: `fijoiiligkknjgndpopmlccnagfponfe`.
+- **Setup:** `native/install.sh`, then brave://extensions -> Developer mode -> Load unpacked ->
+  `extension/`. After editing extension files: reload it there AND press F5 in YT Music
+  (old content scripts are orphaned, not replaced).
+- Debug: in YT Music press Ctrl+Shift+J, context dropdown "top" must list
+  "Music Player Widget Bridge" -- if not, the page wasn't reloaded.
+
 ## Current features
 
 - Play/pause/next/prev, seek-on-click progress bar (client-side interpolated for smoothness
