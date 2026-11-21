@@ -321,15 +321,19 @@
     }
 
     .control-icon:hover {
-      color: #ffffff;
+      color: #c9d1d9;
     }
 
     .nav-btn:hover {
       opacity: 0.8;
     }
 
-    .control-icon.active {
-      color: #ffffff;
+    /* "On" must not look like hover (hover used to be the same white, so
+       a successful click on shuffle/repeat was invisible under the cursor). */
+    .control-icon.active,
+    .control-icon.active:hover {
+      color: #ff2a8a;
+      filter: drop-shadow(0 0 4px rgba(255, 42, 138, 0.6));
     }
 
     .repeat-wrap {
