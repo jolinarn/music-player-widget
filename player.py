@@ -20,7 +20,7 @@ import time
 import fcntl
 import json
 import traceback
-from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice, QTimer
+from PyQt6.QtCore import QUrl, QObject, pyqtSlot, Qt, QFile, QIODevice, QTimer, QPoint
 from PyQt6.QtNetwork import QLocalSocket
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -45,7 +45,7 @@ class DragOutline(QWidget):
     # Wayland-only stand-in for live dragging: a click-through, full-screen
     # overlay that draws the card's outline where it will land. The real
     # window stays put until the drag ends (see WindowBridge).
-    def __init__(self):
+    def __init__(self, screen):
         super().__init__()
         self._pos = None
         self.setWindowFlags(
@@ -55,7 +55,11 @@ class DragOutline(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setup_ok = wayland.setup_fill_overlay(self)
+        self.setup_ok = wayland.setup_fill_overlay(self, screen)
+
+    def clear(self):
+        if self.isVisible():
+            self.hide()
 
     def show_at(self, x, y):
         self._pos = (x, y)
@@ -89,6 +93,15 @@ POSITION_FILE = os.path.join(
 )
 
 
+def _load_screen_name():
+    try:
+        with open(POSITION_FILE) as f:
+            name = json.load(f).get("wayland_screen")
+        return name if isinstance(name, str) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _load_position(kind):
     """Saved [x, y] for "wayland" (layer-shell margins) or "x11" (window pos)."""
     try:
@@ -101,7 +114,7 @@ def _load_position(kind):
     return None
 
 
-def _save_position(kind, pos):
+def _save_position(kind, pos, screen_name=None):
     try:
         with open(POSITION_FILE) as f:
             data = json.load(f)
@@ -110,6 +123,8 @@ def _save_position(kind, pos):
     except (OSError, ValueError):
         data = {}
     data[kind] = [int(pos[0]), int(pos[1])]
+    if screen_name:
+        data["wayland_screen"] = screen_name
     try:
         os.makedirs(os.path.dirname(POSITION_FILE), exist_ok=True)
         tmp = POSITION_FILE + ".tmp"
@@ -137,20 +152,39 @@ class WindowBridge(QObject):
         super().__init__()
         self.window = window
         self.wayland_pos = None  # [x, y] layer-shell margins, None on X11
-        self.outline = None
-        self._target = None
+        self.screen = None       # QScreen the widget is on (Wayland)
+        self.outlines = {}       # QScreen name -> DragOutline
+        self._target = None      # (QScreen, [x, y]) where a drag will land
+        self._grab = (0, 0)
 
     @pyqtSlot(int, int, int, int)
     def drag(self, dx, dy, grab_dx, grab_dy):
         if self.wayland_pos is None:
             self.window.move(self.window.x() + dx, self.window.y() + dy)
             return
-        screen = self.window.screen().geometry()
-        x = max(0, min(self.wayland_pos[0] + grab_dx, screen.width() - self.window.width()))
-        y = max(0, min(self.wayland_pos[1] + grab_dy, screen.height() - self.window.height()))
-        self._target = [x, y]
-        if self.outline is not None:
-            self.outline.show_at(x, y)
+        # Pointer events keep arriving while the button is held, even past
+        # the window's edge, so the drift can carry the card onto another
+        # monitor. Work in desktop coordinates, then pick the monitor under
+        # the pointer.
+        origin = self.screen.geometry().topLeft()
+        gx = origin.x() + self.wayland_pos[0] + grab_dx
+        gy = origin.y() + self.wayland_pos[1] + grab_dy
+        pointer = QPoint(gx + self._grab[0], gy + self._grab[1])
+        screen = QApplication.screenAt(pointer) or self.screen
+        geo = screen.geometry()
+        x = max(0, min(gx - geo.x(), geo.width() - self.window.width()))
+        y = max(0, min(gy - geo.y(), geo.height() - self.window.height()))
+        self._target = (screen, [x, y])
+        for name, outline in self.outlines.items():
+            if name == screen.name():
+                outline.show_at(x, y)
+            else:
+                outline.clear()
+
+    @pyqtSlot(int, int)
+    def drag_start(self, grab_x, grab_y):
+        # where inside the card the pointer grabbed it
+        self._grab = (grab_x, grab_y)
 
     @pyqtSlot()
     def drag_end(self):
@@ -158,12 +192,18 @@ class WindowBridge(QObject):
             # X11 moved live during the drag; just remember where it ended.
             _save_position("x11", [self.window.x(), self.window.y()])
             return
-        if self.outline is not None:
-            self.outline.hide()
-        if self._target is not None and self._target != self.wayland_pos:
-            self.wayland_pos = self._target
-            wayland.set_position(self.window, *self._target)
-            _save_position("wayland", self._target)
+        for outline in self.outlines.values():
+            outline.clear()
+        if self._target is not None:
+            screen, pos = self._target
+            if screen is not self.screen:
+                if wayland.move_to_screen(self.window, screen, *pos):
+                    self.screen = screen
+                    self.wayland_pos = pos
+            elif pos != self.wayland_pos:
+                self.wayland_pos = pos
+                wayland.set_position(self.window, *pos)
+            _save_position("wayland", self.wayland_pos, self.screen.name())
         self._target = None
 
 
@@ -559,18 +599,24 @@ def main():
         # that happen first, then configure the window that will actually show.
         app.processEvents()
         start = _load_position("wayland") or list(WAYLAND_START_POS)
+        saved_screen = _load_screen_name()
+        screen = next((s for s in app.screens() if s.name() == saved_screen),
+                      app.primaryScreen())
         # Keep it on screen if the saved spot came from a bigger monitor.
-        screen = web.screen().geometry()
+        geo = screen.geometry()
         start = [
-            max(0, min(start[0], screen.width() - web.width())),
-            max(0, min(start[1], screen.height() - web.height())),
+            max(0, min(start[0], geo.width() - web.width())),
+            max(0, min(start[1], geo.height() - web.height())),
         ]
-        if wayland.setup_layer_shell(web, *start):
+        if wayland.setup_layer_shell(web, *start, screen=screen):
             window_bridge.wayland_pos = start
-            outline = DragOutline()
-            # without it, Wayland drags still work, just with no preview
-            if outline.setup_ok:
-                window_bridge.outline = outline
+            window_bridge.screen = screen
+            # One drag preview per monitor, so the outline can follow the
+            # pointer across them. Without them drags still work, unpreviewed.
+            for s in app.screens():
+                outline = DragOutline(s)
+                if outline.setup_ok:
+                    window_bridge.outlines[s.name()] = outline
         else:
             print("layer-shell-qt unavailable, widget position is up to the compositor",
                   file=sys.stderr)

@@ -717,6 +717,7 @@
       lastScreenY = e.screenY;
       grabClientX = e.clientX;
       grabClientY = e.clientY;
+      if (windowBridge && windowBridge.drag_start) windowBridge.drag_start(e.clientX, e.clientY);
     });
 
     document.addEventListener('mousemove', (e) => {

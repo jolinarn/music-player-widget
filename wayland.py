@@ -62,8 +62,9 @@ def is_wayland() -> bool:
     return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
 
 
-def setup_layer_shell(widget, x: int, y: int) -> bool:
-    """Make the widget a bottom-layer surface at (x, y). Must run before first show()."""
+def setup_layer_shell(widget, x: int, y: int, screen=None) -> bool:
+    """Make the widget a bottom-layer surface at (x, y) on `screen` (default:
+    primary). Must run before first show()."""
     widget.winId()
     lib, lsw = _get_layer_window(widget)
     if not lsw:
@@ -90,14 +91,32 @@ def setup_layer_shell(widget, x: int, y: int) -> bool:
     fn.argtypes = [ctypes.c_void_p, ctypes.c_bool]
     fn(lsw, False)
 
-    screen = QApplication.primaryScreen()
-    if screen:
-        widget.windowHandle().setScreen(screen)
-        fn = lib._ZN12LayerShellQt6Window9setScreenEP7QScreen
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        fn(lsw, sip.unwrapinstance(screen))
+    _set_screen(widget, lib, lsw, screen or QApplication.primaryScreen())
 
     return set_position(widget, x, y)
+
+
+def _set_screen(widget, lib, lsw, screen):
+    if not screen:
+        return
+    widget.windowHandle().setScreen(screen)
+    fn = lib._ZN12LayerShellQt6Window9setScreenEP7QScreen
+    fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    fn(lsw, sip.unwrapinstance(screen))
+
+
+def move_to_screen(widget, screen, x: int, y: int) -> bool:
+    """Put an already-shown layer surface on another monitor at (x, y).
+    A layer surface's output is fixed once it's mapped, so unmap it, switch
+    the output and remap."""
+    lib, lsw = _get_layer_window(widget)
+    if not lsw:
+        return False
+    widget.hide()
+    _set_screen(widget, lib, lsw, screen)
+    set_position(widget, x, y)
+    widget.show()
+    return True
 
 
 def set_position(widget, x: int, y: int) -> bool:
@@ -113,8 +132,9 @@ def set_position(widget, x: int, y: int) -> bool:
     return True
 
 
-def setup_fill_overlay(widget) -> bool:
-    """Full-screen, click-through overlay-layer surface. Must run before first show()."""
+def setup_fill_overlay(widget, screen=None) -> bool:
+    """Full-screen, click-through overlay-layer surface on `screen` (default:
+    primary). Must run before first show()."""
     widget.winId()
     lib, lsw = _get_layer_window(widget)
     if not lsw:
@@ -141,10 +161,5 @@ def setup_fill_overlay(widget) -> bool:
     fn.argtypes = [ctypes.c_void_p, ctypes.c_bool]
     fn(lsw, False)
 
-    screen = QApplication.primaryScreen()
-    if screen:
-        widget.windowHandle().setScreen(screen)
-        fn = lib._ZN12LayerShellQt6Window9setScreenEP7QScreen
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        fn(lsw, sip.unwrapinstance(screen))
+    _set_screen(widget, lib, lsw, screen or QApplication.primaryScreen())
     return True

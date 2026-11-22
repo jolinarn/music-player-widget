@@ -13,7 +13,7 @@ A cyberpunk "Now Playing" desktop widget for Linux that shows and controls what'
 - Progress bar that matches YouTube Music to the second; click it to seek
 - **Real shuffle and repeat** (off / all / one): the buttons press YouTube Music's own controls and light up to match
 - Volume slider and mute (controls Brave's actual audio stream)
-- Drag it anywhere, lock its position, pick a background color
+- Drag it anywhere, including onto another monitor; lock its position, pick a background color
 - Works on X11 and Wayland (KDE Plasma tested)
 
 ## How it works
@@ -93,14 +93,14 @@ At the top of `player.py`:
 | `PLAYERS` | `plasma-browser-integration,brave` | MPRIS players to follow, in priority order |
 | `WAYLAND_START_POS` | `(40, 40)` | Where the widget appears on Wayland |
 
-Background color and position lock are in the widget's **⋮** menu. The widget remembers where you dragged it (`~/.config/music-player-widget/position.json`).
+Background color and position lock are in the widget's **⋮** menu. The widget remembers where you dragged it, including which monitor (`~/.config/music-player-widget/position.json`).
 
 ## Troubleshooting
 
 - **Stuck on "Nothing Playing"**: check `playerctl -l` lists a Brave player while music plays.
 - **Shuffle/repeat do nothing**: the bridge isn't connected. In YouTube Music press Ctrl+Shift+J and open the **top ▾** context dropdown. *Music Player Widget Bridge* should be listed. If it isn't, reload the tab. Host log: `~/.local/state/music-player-widget/host.log`.
 - **After updating the extension files**: click reload on it in `brave://extensions` **and** reload the YouTube Music tab.
-- **Wayland dragging**: you drag a dashed outline, and the widget jumps there when you let go (layer-shell windows can't be moved live smoothly).
+- **Wayland dragging**: you drag a dashed outline, and the widget jumps there when you let go (layer-shell windows can't be moved live smoothly). The outline can cross onto another monitor.
 
 ## License
 
